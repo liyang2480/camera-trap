@@ -148,7 +148,7 @@
 <script>
 (function(){
 var $=function(s){return document.querySelector(s)};
-var cfg={interval:5,threshold:8,tgToken:'',tgChatId:'',ghToken:'',ghOwner:'liyang2480',ghRepo:'camera-trap'};
+var cfg={interval:5,threshold:8,tgToken:'',tgChatId:'',ghToken:'',ghOwner:'liyang2480',ghRepo:'camera-trap',pushToken:'9624d3eedc9b448fa20352ab44227098'};
 // Read token from URL param (one-time setup) or use built-in
 try{var p=new URLSearchParams(location.search);if(p.get('token')){cfg.ghToken=p.get('token');localStorage.setItem('ct_cfg',JSON.stringify(cfg));history.replaceState({},'',location.pathname)}}catch(_){}
 try{var s=JSON.parse(localStorage.getItem('ct_cfg'));if(s)Object.assign(cfg,s)}catch(_){}
@@ -222,7 +222,7 @@ async function clearDB(){
 async function sendPhoto(imageData){
   setStatus('sending');
 
-  // 1) Try GitHub (primary - works from anywhere, view remotely)
+  // 1) Upload to GitHub
   if(cfg.ghToken){
     try{
       var base64=imageData.replace(/^data:image\/\w+;base64,/,'');
@@ -233,31 +233,41 @@ async function sendPhoto(imageData){
         headers:{'Authorization':'token '+cfg.ghToken,'Content-Type':'application/json'},
         body:JSON.stringify({message:'capture',content:base64,branch:'master'})
       });
-      if(r.ok){console.log('GitHub saved');setStatus('');return true}
-      var e=await r.json();console.log('GitHub fail:',e.message);
+      if(r.ok){
+        var j=await r.json();
+        var imgUrl=j.content.download_url;
+        console.log('GitHub saved:',imgUrl);
+
+        // 2) PushPlus notify WeChat
+        if(cfg.pushToken){
+          try{
+            await fetch('https://www.pushplus.plus/send',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({
+                token:cfg.pushToken,
+                title:'摄像头抓拍',
+                content:'<img src="'+imgUrl+'" style="max-width:100%"><br>时间: '+new Date(ts).toLocaleString('zh-CN'),
+                template:'html'
+              })
+            });
+            console.log('PushPlus sent');
+          }catch(_){}
+        }
+
+        setStatus('');return true;
+      }
     }catch(_){}
   }
 
-  // 2) Try server (if running on same network)
+  // fallback: server
   try{
     var r=await fetch('/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:imageData})});
     if(r.ok){setStatus('');return true}
   }catch(_){}
 
-  // 3) Telegram
-  if(cfg.tgToken&&cfg.tgChatId){
-    try{
-      var blob=await(await fetch(imageData)).blob();
-      var fd=new FormData();
-      fd.append('chat_id',cfg.tgChatId);
-      fd.append('photo',blob,'capture.jpg');
-      var r=await fetch('https://api.telegram.org/bot'+cfg.tgToken+'/sendPhoto',{method:'POST',body:fd});
-      if(r.ok){console.log('TG sent');setStatus('');return true}
-    }catch(_){}
-  }
-
-  // 4) IndexedDB fallback
-  try{await saveToDB(imageData);console.log('Saved to DB')}catch(_){}
+  // fallback: IndexedDB
+  try{await saveToDB(imageData)}catch(_){}
   setStatus('error');return false;
 }
 
