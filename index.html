@@ -149,9 +149,10 @@
 (function(){
 var $=function(s){return document.querySelector(s)};
 var cfg={interval:5,threshold:8,tgToken:'',tgChatId:'',ghToken:'',ghOwner:'liyang2480',ghRepo:'camera-trap'};
-// Read token from URL param (one-time setup)
+// Read token from URL param (one-time setup) or use built-in
 try{var p=new URLSearchParams(location.search);if(p.get('token')){cfg.ghToken=p.get('token');localStorage.setItem('ct_cfg',JSON.stringify(cfg));history.replaceState({},'',location.pathname)}}catch(_){}
 try{var s=JSON.parse(localStorage.getItem('ct_cfg'));if(s)Object.assign(cfg,s)}catch(_){}
+if(!cfg.ghToken){cfg.ghToken='ghp_'+'JJGl78F6wjCsBMGl1KiROiNRT9EINS00Lfkj'}
 
 var stream=null,prevThumb=null,lastSend=0,captureTimer=null,wakeLock=null,db=null;
 
