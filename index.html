@@ -102,22 +102,30 @@
   <button class="close-btn">&times;</button>
   <h2>设置</h2>
 
+  <label>GitHub Token (远程查看照片用)</label>
+  <input type="text" id="cfg-gh-token" placeholder="ghp_xxxxxxxx...">
+
   <label>拍照间隔（秒）</label>
   <input type="number" id="cfg-interval" value="5" min="2" max="60">
 
   <label>动作灵敏度（越小越灵敏，建议 5~15）</label>
   <input type="number" id="cfg-threshold" value="8" min="1" max="50">
 
-  <label>Telegram Bot Token</label>
+  <label>Telegram Bot Token (可选)</label>
   <input type="text" id="cfg-tg-token" placeholder="1234567890:ABCdef...">
 
-  <label>Telegram Chat ID</label>
+  <label>Telegram Chat ID (可选)</label>
   <input type="text" id="cfg-tg-chatid" placeholder="123456789">
 
   <div class="hint">
-    ① Telegram 搜 <b>@BotFather</b> 创建 Bot，拿到 Token<br>
-    ② 搜 <b>@userinfobot</b> 获取你的 Chat ID<br>
-    ③ 填好后点「测试拍照」，Telegram 收到照片即成功
+    <b>推荐用 GitHub 远程查看：</b><br>
+    ① 打开 <b>github.com/settings/tokens</b><br>
+    ② 点 Generate new token (classic)<br>
+    ③ 勾选 <b>repo</b> 权限 → 生成 → 复制 Token<br>
+    ④ 粘贴到上面输入框 → 保存 → 测试拍照<br>
+    ⑤ 远程查看: <b>github.com/liyang2480/camera-trap</b><br>
+    <br>
+    Telegram 备选: 搜 @BotFather 创建 Bot
   </div>
 
   <button id="btn-test">测试拍照</button>
@@ -140,7 +148,7 @@
 <script>
 (function(){
 var $=function(s){return document.querySelector(s)};
-var cfg={interval:5,threshold:8,tgToken:'',tgChatId:''};
+var cfg={interval:5,threshold:8,tgToken:'',tgChatId:'',ghToken:'',ghOwner:'liyang2480',ghRepo:'camera-trap'};
 try{var s=JSON.parse(localStorage.getItem('ct_cfg'));if(s)Object.assign(cfg,s)}catch(_){}
 
 var stream=null,prevThumb=null,lastSend=0,captureTimer=null,wakeLock=null,db=null;
@@ -211,13 +219,29 @@ async function clearDB(){
 async function sendPhoto(imageData){
   setStatus('sending');
 
-  // 1) Try server (if running)
+  // 1) Try GitHub (primary - works from anywhere, view remotely)
+  if(cfg.ghToken){
+    try{
+      var base64=imageData.replace(/^data:image\/\w+;base64,/,'');
+      var ts=Date.now();
+      var fn='capture_'+new Date(ts).toISOString().replace(/[:.]/g,'-')+'.jpg';
+      var r=await fetch('https://api.github.com/repos/'+cfg.ghOwner+'/'+cfg.ghRepo+'/contents/captures/'+fn,{
+        method:'PUT',
+        headers:{'Authorization':'token '+cfg.ghToken,'Content-Type':'application/json'},
+        body:JSON.stringify({message:'capture',content:base64,branch:'master'})
+      });
+      if(r.ok){console.log('GitHub saved');setStatus('');return true}
+      var e=await r.json();console.log('GitHub fail:',e.message);
+    }catch(_){}
+  }
+
+  // 2) Try server (if running on same network)
   try{
     var r=await fetch('/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:imageData})});
     if(r.ok){setStatus('');return true}
   }catch(_){}
 
-  // 2) Telegram
+  // 3) Telegram
   if(cfg.tgToken&&cfg.tgChatId){
     try{
       var blob=await(await fetch(imageData)).blob();
@@ -229,7 +253,7 @@ async function sendPhoto(imageData){
     }catch(_){}
   }
 
-  // 3) IndexedDB fallback
+  // 4) IndexedDB fallback
   try{await saveToDB(imageData);console.log('Saved to DB')}catch(_){}
   setStatus('error');return false;
 }
@@ -302,6 +326,7 @@ $('#date').addEventListener('click',function(){
 });
 
 async function openAdmin(){
+  $('#cfg-gh-token').value=cfg.ghToken;
   $('#cfg-interval').value=cfg.interval;
   $('#cfg-threshold').value=cfg.threshold;
   $('#cfg-tg-token').value=cfg.tgToken;
@@ -345,6 +370,7 @@ $('#btn-test').addEventListener('click',async function(){
 });
 
 $('#btn-save-cfg').addEventListener('click',function(){
+  cfg.ghToken=$('#cfg-gh-token').value.trim();
   cfg.interval=Math.max(2,parseInt($('#cfg-interval').value)||5);
   cfg.threshold=Math.max(1,parseInt($('#cfg-threshold').value)||8);
   cfg.tgToken=$('#cfg-tg-token').value.trim();
